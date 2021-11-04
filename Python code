@@ -88,3 +88,113 @@ price_delete_outlier = listing[listing['price'] < 10000]
 sns.boxplot(x = 'beds', y = 'price', data = price_delete_outlier)
 plt.xticks(rotation = 45)
 plt.show()
+
+======================================================================================================================================================
+# Try to clean the data and build a model. 
+# Let's check the listing dataset.
+# Import the packages that we need.
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+import plotly.offline as py
+py.init_notebook_mode(connected = True)
+import plotly.graph_objs as go
+import plotly.tools as tls
+import plotly.figure_factory as ff
+
+import cufflinks
+
+# Import data
+listing = pd.read_csv('/Users/Howard/Desktop/Airbnb_Taiwan_2021/listings.csv')
+listing['price'] = listing['price'].str.replace(',','').str.replace('$','').astype(float)
+price_delete_outlier = listing[listing['price'] < 10000]
+
+# df.select_dtypes() returns the columns of a specific data type.
+continuous_variables = listing.select_dtypes(np.number).columns # We picked the columns with numbers then by using .columns, it will return the columns only.
+no_null_col = price_delete_outlier[continuous_variables].isnull().sum() == 0 # return the number of missing values.
+no_null_col = no_null_col[no_null_col == True].index.tolist()
+
+# Remove the columns with id, which is the first three columns.
+no_null_col = no_null_col[3:]
+
+# Then we can see the correlation between those continuous variables.
+correlation = price_delete_outlier[no_null_col].dropna().corr() # .corr() is to find the correlation
+sns.heatmap(correlation, annot = True, fmt = '.2f') # fmt = '.2f' means 2 decimal places, annot = True will show the correlation coefficient in the heatmap.
+sns.set_theme(font_scale = 1)
+plt.show()
+
+# Now we are going to do the data cleansing, or data preprocessing.
+# We should delete the outliers, the columns with too many NaN in it. Also, the columns with too many repetitive values.
+# As repetitive date would not be helpful to train the model.
+
+listing = price_delete_outlier # Delete the outliers
+no_null_col = listing.isnull().sum() == 0 # Return true if there's no NaN in a column.
+no_null_col = no_null_col[no_null_col == True].index.tolist() # Pick the columns that do not have NaN
+listing = listing[no_null_col] # Put the above columns into the dataframe listing.
+
+# Use below to show what amenities does the room have.
+from sklearn.feature_extraction.text import CountVectorizer
+listing['amenities'] = listing['amenities'].str.replace('[{}]','').str.replace('"','')
+counter_vectorizer = CountVectorizer(tokenizer=lambda x:x.split(','))
+amenities = counter_vectorizer.fit_transform(listing['amenities'])
+df_amenities = pd.DataFrame(amenities.toarray(), columns = counter_vectorizer.get_feature_names())
+
+# Let's pick the variables with numbers or float.
+continuous_variables = listing.select_dtypes(np.number).columns.drop(['id','scrape_id','host_id']).tolist()
+
+category_var = []
+for col in listing.columns:
+    if col not in continuous_variables:
+        category_var.append(col)
+print(category_var) # This is to check if cat_var is really not helpful as those columns do not store any number or float.
+
+useless_variables = ['id', 'host_id', 'scrape_id', 'listing_url', 'picture_url', 'host_url', 'country_code', 'country', \
+'experiencee_offered', 'street', 'smart_location']
+
+final_category_variables = []
+for var in category_var:
+    if var not in useless_variables:
+        final_category_variables.append(var)
+print(final_category_variables) # To find out those columns with category information, but maybe useful.
+
+# So our final df would be those columns with float and columns with useful category information.
+df = listing[final_category_variables + continuous_variables]
+print(listing[final_category_variables])
+
+# Then we are going to concat the table df and df_amenities horizontally.
+df = pd.concat([df,df_amenities], axis=1, join='inner') # axis = 1 meaning horizontal concatenation.
+print(df.head(5).to_string())
+
+# For those strings or text, we would need to transfer them into numbers via One Hot Encoder (a bit like pd.get_dummies(df))
+# or Label Encoder (For sequential(有序的) text) or Mean Encoder. Please check 'https://www.maxlist.xyz/2019/03/28/ml-100days-2/#三_均值編碼_Mean_Encoding'
+# for details.
+
+# So we will define functions for one_hot_encoder and mean_encoder
+from sklearn.preprocessing import LabelEncoder
+def one_hot_encoder(column, df):
+    counter_vectorizer = CountVectorizer()
+    this_column = counter_vectorizer.fit_transform(df[column])
+    temp_df = pd.DataFrame(this_column.toarray(), columns = counter_vectorizer.get_feature_names())
+    return temp_df
+
+def mean_encoder(df, obj_columns, obj_y):
+    for col in obj_columns:
+        temp_df = df.groupby([col])[obj_y].mean().reset_index()
+        temp_df.columns = [col, f"{col}_mean"] # 將 col. col_mean 作為新的column
+        df = df.merge(temp_df, how = 'left', on = col)
+        df = df.drop([col], axis = 1)
+    return df
+
+# Label Encoder
+df['room_type'] = LabelEncoder().fit_transform(df['room_type'])
+df['bed_type'] = LabelEncoder().fit_transform(df['bed_type'])
+
+# Drop
+drop_ls = ['host_verifications','amenities','calendar_last_scraped']
+df = df.drop(drop_ls, axis = 1)
+
+# Mean Encoder
+mean_ls = ['neighbourhood_cleansed','property_type','cancellation_policy']
+df = mean_encoder(df, mean_ls, 'price')
